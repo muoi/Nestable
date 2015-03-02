@@ -1,10 +1,12 @@
 /*!
  * Nestable jQuery Plugin - Copyright (c) 2012 David Bushell - http://dbushell.com/
  * Dual-licensed under the BSD or MIT licenses
+ * This version from: https://github.com/sul-dlss/Nestable
  */
 ;(function($, window, document, undefined)
 {
     var hasTouch = 'ontouchstart' in window;
+    var nestableCopy;
 
     /**
      * Detect CSS pointer-events property
@@ -26,33 +28,55 @@
         return !!supports;
     })();
 
-    var eStart  = hasTouch ? 'touchstart'  : 'mousedown',
-        eMove   = hasTouch ? 'touchmove'   : 'mousemove',
-        eEnd    = hasTouch ? 'touchend'    : 'mouseup';
-        eCancel = hasTouch ? 'touchcancel' : 'mouseup';
+	var eStart  = hasTouch ? 'touchstart'  : 'mousedown',
+		 eMove   = hasTouch ? 'touchmove'   : 'mousemove',
+	  	 eEnd    = hasTouch ? 'touchend'    : 'mouseup',
+	  	 eCancel = hasTouch ? 'touchcancel' : 'mouseup';
 
-    var defaults = {
-            listNodeName    : 'ol',
-            itemNodeName    : 'li',
-            rootClass       : 'dd',
-            listClass       : 'dd-list',
-            itemClass       : 'dd-item',
-            dragClass       : 'dd-dragel',
-            handleClass     : 'dd-handle',
-            collapsedClass  : 'dd-collapsed',
-            placeClass      : 'dd-placeholder',
-            noDragClass     : 'dd-nodrag',
-            emptyClass      : 'dd-empty',
-            expandBtnHTML   : '<button data-action="expand" type="button">Expand</button>',
-            collapseBtnHTML : '<button data-action="collapse" type="button">Collapse</button>',
-            group           : 0,
-            maxDepth        : 5,
-            threshold       : 20
-        };
+	var defaults = {
+		listNodeName    : 'ol',
+		itemNodeName    : 'li',
+		rootClass       : 'dd',
+		listClass       : 'dd-list',
+		itemClass       : 'dd-item',
+		dragClass       : 'dd-dragel',
+		handleClass     : 'dd-handle',
+		collapsedClass  : 'dd-collapsed',
+		placeClass      : 'dd-placeholder',
+		noDragClass     : 'dd-nodrag',
+		noChildrenClass : 'dd-nochildren',
+		emptyClass      : 'dd-empty',
+		expandBtnHTML   : '<button data-action="expand" type="button">Expand</button>',
+		collapseBtnHTML : '<button data-action="collapse" type="button">Collapse</button>',
+        horizontalList  : false, /* Allows list to be laid out horizontaly instead of vertical */
+		group           : 0,
+		maxDepth        : 5,
+		threshold       : 20,
+		reject          : [],
+        distance        : 1,
+		//method for call when an item has been successfully dropped
+		//method has 1 argument in which sends an object containing all
+		//necessary details
+		dropCallback    : null,
+        // When a node is dragged it is moved to its new location.
+        // You can set the next option to true to create a copy of the node  that is dragged.
+        cloneNodeOnDrag   : false,
+        // When the node is dragged and released outside its list delete it.
+        dragOutsideToDelete : false,
+        scroll              : false,
+        scrollSensitivity   : 8,
+        scrollSpeed         : 10,
+        scrollTriggers      : {
+                               top: 40,
+                               left: 40,
+                               right: -40,
+                               bottom: -40
+                            }
+	};
 
     function Plugin(element, options)
     {
-        this.w  = $(window);
+        this.w = $(document);
         this.el = $(element);
         this.options = $.extend({}, defaults, options);
         this.init();
@@ -74,7 +98,8 @@
                 list.setParent($(el));
             });
 
-            list.el.on('click', 'button', function(e) {
+            list.el.on('click', 'button', function(e)
+            {
                 if (list.dragEl || (!hasTouch && e.button !== 0)) {
                     return;
                 }
@@ -89,16 +114,48 @@
                 }
             });
 
-            var onStartEvent = function(e)
+            var moving = function(e) {
+              if (distanceMet(e)) {
+                list._dragStarted = true
+              }
+              if (list._dragStarted) {
+                onDragStartEvent(e);
+              }
+            };
+
+            var doneMoving = function(e) {
+              list.w.unbind(eMove, moving).unbind(eEnd, doneMoving);
+            };
+
+            var onStartEvent = function(e) {
+              list._dragStarted = false;
+              list._startEvent = e;
+              list.w.bind(eMove, moving).bind(eEnd, doneMoving);
+              e.preventDefault();
+            };
+
+
+            var distanceMet = function(e) {
+              return (Math.max(
+                  Math.abs(list._startEvent.pageX - e.pageX),
+                  Math.abs(list._startEvent.pageY - e.pageY)
+                ) >= list.options.distance
+              );
+            };
+
+            var onDragStartEvent = function(e)
             {
                 var handle = $(e.target);
+
+                list.nestableCopy = handle.closest('.'+list.options.rootClass).clone(true);
+
                 if (!handle.hasClass(list.options.handleClass)) {
                     if (handle.closest('.' + list.options.noDragClass).length) {
                         return;
                     }
                     handle = handle.closest('.' + list.options.handleClass);
                 }
-                if (!handle.length || list.dragEl || (!hasTouch && e.button !== 0) || (hasTouch && e.touches.length !== 1)) {
+                if (!handle.length || list.dragEl || (!hasTouch && e.which !== 1) || (hasTouch && e.touches.length !== 1)) {
                     return;
                 }
                 e.preventDefault();
@@ -132,6 +189,36 @@
                 list.w.on(eEnd, onEndEvent);
             }
 
+            var destroyNestable = function()
+            {
+                if (hasTouch) {
+                    list.el[0].removeEventListener(eStart, onStartEvent, false);
+                    window.removeEventListener(eMove, onMoveEvent, false);
+                    window.removeEventListener(eEnd, onEndEvent, false);
+                    window.removeEventListener(eCancel, onEndEvent, false);
+                } else {
+                    list.el.off(eStart, onStartEvent);
+                    list.w.off(eMove, onMoveEvent);
+                    list.w.off(eEnd, onEndEvent);
+                }
+
+                list.el.off('click');
+                list.el.unbind('destroy-nestable');
+
+                list.el.data("nestable", null);
+
+                var buttons = list.el[0].getElementsByTagName('button');
+
+                $(buttons).remove();
+            };
+
+            list.el.bind('destroy-nestable', destroyNestable);
+        },
+
+        destroy: function ()
+        {
+            this.expandAll();
+            this.el.trigger('destroy-nestable');
         },
 
         serialize: function()
@@ -155,13 +242,16 @@
                     });
                     return array;
                 };
-            data = step(list.el.find(list.options.listNodeName).first(), depth);
-            return data;
-        },
+            var el;
 
-        serialise: function()
-        {
-            return this.serialize();
+            if (list.el.is(list.options.listNodeName)) {
+                el = list.el;
+            } else {
+                el = list.el.find(list.options.listNodeName).first();
+            }
+            data = step(el, depth);
+
+            return data;
         },
 
         reset: function()
@@ -189,8 +279,11 @@
             this.dragEl     = null;
             this.dragRootEl = null;
             this.dragDepth  = 0;
+            this.dragItem   = null;
             this.hasNewRoot = false;
             this.pointEl    = null;
+            this.sourceRoot = null;
+            this.isOutsideRoot = false;
         },
 
         expandItem: function(li)
@@ -199,6 +292,8 @@
             li.children('[data-action="expand"]').hide();
             li.children('[data-action="collapse"]').show();
             li.children(this.options.listNodeName).show();
+            this.el.trigger('expand', [li]);
+            li.trigger('expand');
         },
 
         collapseItem: function(li)
@@ -210,6 +305,8 @@
                 li.children('[data-action="expand"]').show();
                 li.children(this.options.listNodeName).hide();
             }
+            this.el.trigger('collapse', [li]);
+            li.trigger('collapse');
         },
 
         expandAll: function()
@@ -234,7 +331,12 @@
                 li.prepend($(this.options.expandBtnHTML));
                 li.prepend($(this.options.collapseBtnHTML));
             }
-            li.children('[data-action="expand"]').hide();
+            if( (' ' + li[0].className + ' ').indexOf(' ' + defaults.collapsedClass + ' ') > -1 )
+            {
+                li.children('[data-action="collapse"]').hide();
+            } else {
+                li.children('[data-action="expand"]').hide();
+            }
         },
 
         unsetParent: function(li)
@@ -248,7 +350,11 @@
         {
             var mouse    = this.mouse,
                 target   = $(e.target),
-                dragItem = target.closest(this.options.itemNodeName);
+                dragItem = target.closest('.' + this.options.handleClass).closest(this.options.itemNodeName);
+
+            this.sourceRoot = target.closest('.' + this.options.rootClass);
+
+            this.dragItem = dragItem;
 
             this.placeEl.css('height', dragItem.height());
 
@@ -264,7 +370,11 @@
 
             // fix for zepto.js
             //dragItem.after(this.placeEl).detach().appendTo(this.dragEl);
-            dragItem.after(this.placeEl);
+            if(this.options.cloneNodeOnDrag) {
+                dragItem.after(dragItem.clone());
+            } else {
+                dragItem.after(this.placeEl);
+            }
             dragItem[0].parentNode.removeChild(dragItem[0]);
             dragItem.appendTo(this.dragEl);
 
@@ -290,14 +400,78 @@
             //this.placeEl.replaceWith(this.dragEl.children(this.options.itemNodeName + ':first').detach());
             var el = this.dragEl.children(this.options.itemNodeName).first();
             el[0].parentNode.removeChild(el[0]);
-            this.placeEl.replaceWith(el);
 
-            this.dragEl.remove();
-            this.el.trigger('change');
-            if (this.hasNewRoot) {
-                this.dragRootEl.trigger('change');
+            if(this.isOutsideRoot && this.options.dragOutsideToDelete)
+				{
+                var parent = this.placeEl.parent();
+                this.placeEl.remove();
+                if (!parent.children().length) {
+                    this.unsetParent(parent.parent());
+                }
+                // If all nodes where deleted, create a placeholder element.
+                if (!this.dragRootEl.find(this.options.itemNodeName).length)
+					 {
+                    this.dragRootEl.append('<div class="' + this.options.emptyClass + '"/>');
+                }
+            } 
+				else 
+				{
+                this.placeEl.replaceWith(el);
             }
-            this.reset();
+
+            if (!this.moving)
+            {
+                $(this.dragItem).trigger('click');
+            }
+
+            var i;
+            var isRejected = false;
+            for (i in this.options.reject)
+            {
+                var reject = this.options.reject[i];
+                if (reject.rule.apply(this.dragRootEl))
+                {
+                    var nestableDragEl = el.clone(true);
+                    this.dragRootEl.html(this.nestableCopy.children().clone(true));
+                    if (reject.action) {
+                        reject.action.apply(this.dragRootEl, [nestableDragEl]);
+                    }
+
+                    isRejected = true;
+                    break;
+                }
+            }
+
+            if (!isRejected)
+            {
+                this.dragEl.remove();
+                this.el.trigger('change');
+
+                //Let's find out new parent id
+                var parentItem = el.parent().parent();
+                var parentId = null;
+                if(parentItem !== null && !parentItem.is('.' + this.options.rootClass))
+                    parentId = parentItem.data('id');
+
+                if($.isFunction(this.options.dropCallback))
+                {
+                    var details = {
+                        sourceId   : el.data('id'),
+                        destId     : parentId,
+                        sourceEl   : el,
+                        destParent : parentItem,
+                        destRoot   : el.closest('.' + this.options.rootClass),
+                        sourceRoot : this.sourceRoot
+                  };
+                  this.options.dropCallback.call(this, details);
+                }
+
+                if (this.hasNewRoot) {
+                    this.dragRootEl.trigger('change');
+                }
+
+                this.reset();
+            }
         },
 
         dragMove: function(e)
@@ -330,10 +504,45 @@
             var newAx   = Math.abs(mouse.distX) > Math.abs(mouse.distY) ? 1 : 0;
 
             // do nothing on first move
-            if (!mouse.moving) {
+            if (!this.moving) {
                 mouse.dirAx  = newAx;
-                mouse.moving = true;
+                this.moving = true;
                 return;
+            }
+
+                        //Do scrolling
+            if (opt.scroll) {
+                var scrolled = false;
+                var scrollParent = this.el.scrollParent()[0];
+                if(scrollParent != document && scrollParent.tagName != 'HTML') {
+                    if((opt.scrollTriggers.bottom + scrollParent.offsetHeight) - e.pageY < opt.scrollSensitivity)
+                        scrollParent.scrollTop = scrolled = scrollParent.scrollTop + opt.scrollSpeed;
+                    else if(e.pageY - opt.scrollTriggers.top < opt.scrollSensitivity)
+                        scrollParent.scrollTop = scrolled = scrollParent.scrollTop - opt.scrollSpeed;
+
+                    if((opt.scrollTriggers.right + scrollParent.offsetWidth) - e.pageX < opt.scrollSensitivity)
+                        scrollParent.scrollLeft = scrolled = scrollParent.scrollLeft + opt.scrollSpeed;
+                    else if(e.pageX - opt.scrollTriggers.left < opt.scrollSensitivity)
+                        scrollParent.scrollLeft = scrolled = scrollParent.scrollLeft - opt.scrollSpeed;
+                } else {
+                    if(e.pageY - $(document).scrollTop() < opt.scrollSensitivity)
+                        scrolled = $(document).scrollTop($(document).scrollTop() - opt.scrollSpeed);
+                    else if($(window).height() - (e.pageY - $(document).scrollTop()) < opt.scrollSensitivity)
+                        scrolled = $(document).scrollTop($(document).scrollTop() + opt.scrollSpeed);
+
+                    if(e.pageX - $(document).scrollLeft() < opt.scrollSensitivity)
+                        scrolled = $(document).scrollLeft($(document).scrollLeft() - opt.scrollSpeed);
+                    else if($(window).width() - (e.pageX - $(document).scrollLeft()) < opt.scrollSensitivity)
+                        scrolled = $(document).scrollLeft($(document).scrollLeft() + opt.scrollSpeed);
+                }
+            }
+
+            if (this.scrollTimer)
+                clearTimeout(this.scrollTimer);
+            if (opt.scroll && scrolled) {
+                this.scrollTimer = setTimeout(function() {
+                    $(window).trigger(e);
+                }, 10);
             }
 
             // calc distance moved on this axis (and direction)
@@ -360,7 +569,7 @@
                 mouse.distAxX = 0;
                 prev = this.placeEl.prev(opt.itemNodeName);
                 // increase horizontal level if previous sibling exists and is not collapsed
-                if (mouse.distX > 0 && prev.length && !prev.hasClass(opt.collapsedClass)) {
+                if (mouse.distX > 0 && prev.length && !prev.hasClass(opt.collapsedClass) && !prev.hasClass(opt.noChildrenClass)) {
                     // cannot increase level when item above is collapsed
                     list = prev.find(opt.listNodeName).last();
                     // check if depth limit has reached
@@ -399,13 +608,35 @@
             if (!hasPointerEvents) {
                 this.dragEl[0].style.visibility = 'hidden';
             }
-            this.pointEl = $(document.elementFromPoint(e.pageX - document.body.scrollLeft, e.pageY - (window.pageYOffset || document.documentElement.scrollTop)));
+				
+            this.pointEl = $(document.elementFromPoint(e.pageX - document.documentElement.scrollLeft, e.pageY - (window.pageYOffset || document.documentElement.scrollTop)));
+
+            // Check if the node is dragged outside of its list.
+            if(this.dragRootEl.has(this.pointEl).length) {
+                this.isOutsideRoot = false;
+                this.dragEl[0].style.opacity = 1;
+            } else {
+                this.isOutsideRoot = true;
+                this.dragEl[0].style.opacity = 0.5;
+            }
+
+            // find parent list of item under cursor
+            var pointElRoot = this.pointEl.closest('.' + opt.rootClass),
+                isNewRoot   = this.dragRootEl.data('nestable-id') !== pointElRoot.data('nestable-id');
+
+            this.isOutsideRoot = !pointElRoot.length;
+
             if (!hasPointerEvents) {
                 this.dragEl[0].style.visibility = 'visible';
             }
             if (this.pointEl.hasClass(opt.handleClass)) {
-                this.pointEl = this.pointEl.parent(opt.itemNodeName);
+                this.pointEl = this.pointEl.closest( opt.itemNodeName );
             }
+
+            if (opt.maxDepth == 1 && !this.pointEl.hasClass(opt.itemClass)) {
+                this.pointEl = this.pointEl.closest("." + opt.itemClass);
+            }
+
             if (this.pointEl.hasClass(opt.emptyClass)) {
                 isEmpty = true;
             }
@@ -413,9 +644,6 @@
                 return;
             }
 
-            // find parent list of item under cursor
-            var pointElRoot = this.pointEl.closest('.' + opt.rootClass),
-                isNewRoot   = this.dragRootEl.data('nestable-id') !== pointElRoot.data('nestable-id');
 
             /**
              * move vertical
@@ -430,7 +658,7 @@
                 if (depth > opt.maxDepth) {
                     return;
                 }
-                var before = e.pageY < (this.pointEl.offset().top + this.pointEl.height() / 2);
+                var before = this.isBefore(e);
                     parent = this.placeEl.parent();
                 // if empty create new list to replace empty placeholder
                 if (isEmpty) {
@@ -451,11 +679,18 @@
                     this.dragRootEl.append('<div class="' + opt.emptyClass + '"/>');
                 }
                 // parent root list has changed
+                this.dragRootEl = pointElRoot;
                 if (isNewRoot) {
-                    this.dragRootEl = pointElRoot;
                     this.hasNewRoot = this.el[0] !== this.dragRootEl[0];
                 }
             }
+        },
+
+        isBefore: function(e) {
+          if (this.options.horizontalList)
+              return e.pageX < (this.pointEl.offset().left + this.pointEl.width() / 2);
+          else
+              return e.pageY < (this.pointEl.offset().top + this.pointEl.height() / 2);
         }
 
     };
@@ -465,13 +700,23 @@
         var lists  = this,
             retval = this;
 
+        var generateUid = function (separator) {
+            var delim = separator || "-";
+
+            function S4() {
+                return (((1 + Math.random()) * 0x10000) | 0).toString(16).substring(1);
+            }
+
+            return (S4() + S4() + delim + S4() + delim + S4() + delim + S4() + delim + S4() + S4() + S4());
+        };
+
         lists.each(function()
         {
             var plugin = $(this).data("nestable");
 
             if (!plugin) {
                 $(this).data("nestable", new Plugin(this, params));
-                $(this).data("nestable-id", new Date().getTime());
+                $(this).data("nestable-id", generateUid());
             } else {
                 if (typeof params === 'string' && typeof plugin[params] === 'function') {
                     retval = plugin[params]();
