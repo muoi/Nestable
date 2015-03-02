@@ -409,8 +409,7 @@
                     this.unsetParent(parent.parent());
                 }
                 // If all nodes where deleted, create a placeholder element.
-                if (!this.dragRootEl.find(this.options.itemNodeName).length)
-					 {
+                if (!this.dragRootEl.find(opt.itemNodeName).length && !this.dragRootEl.find(opt.emptyClass).length) {
                     this.dragRootEl.append('<div class="' + this.options.emptyClass + '"/>');
                 }
             } 
